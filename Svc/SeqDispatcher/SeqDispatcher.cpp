@@ -123,6 +123,9 @@ void SeqDispatcher::seqDoneIn_handler(FwIndexType portNum,             //!< The 
     this->m_entryTable[portNum].sequenceRunning = "<no seq>";
     this->m_sequencersAvailable++;
     this->tlmWrite_sequencersAvailable(this->m_sequencersAvailable);
+
+    // Try to dispatch from queue
+    this->tryDispatchFromQueue();
 }
 
 //! Handler for input port seqRunIn
@@ -156,24 +159,60 @@ void SeqDispatcher ::RUN_ARGS_cmdHandler(const FwOpcodeType opCode,
                                          const Fw::CmdStringArg& fileName,
                                          const BlockState& block,
                                          const Svc::SeqArgs& buffer) {
+    // Load max queue depth parameter
+    Fw::ParamValid valid;
+    U32 maxDepth = paramGet_MAX_QUEUE_DEPTH(valid);
+    if (valid == Fw::ParamValid::VALID) {
+        this->m_maxQueueDepth = maxDepth;
+    }
+
     FwIndexType idx = this->getNextAvailableSequencerIdx();
-    // no available sequencers
-    if (idx == -1) {
-        this->log_WARNING_HI_NoAvailableSequencers();
-        this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::EXECUTION_ERROR);
+
+    // Try direct dispatch if sequencer available
+    if (idx != -1) {
+        this->runSequence(idx, fileName, block, buffer);
+
+        if (block == BlockState::NO_BLOCK) {
+            // return instantly
+            this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::OK);
+        } else {
+            // otherwise don't return a response yet. just save the opCode and cmdSeq
+            // so we can return a response later
+            this->m_entryTable[idx].opCode = opCode;
+            this->m_entryTable[idx].cmdSeq = cmdSeq;
+        }
         return;
     }
 
-    this->runSequence(idx, fileName, block, buffer);
+    // No available sequencers - try to queue if enabled
+    if (this->m_maxQueueDepth > 0 && this->m_sequenceQueue.size() < this->m_maxQueueDepth) {
+        // Queue the sequence
+        QueueEntry entry;
+        entry.fileName = fileName.toChar();
+        entry.args = buffer;
+        entry.blockState = block;
+        entry.opCode = opCode;
+        entry.cmdSeq = cmdSeq;
+        entry.queueTime = this->getTime();
 
-    if (block == BlockState::NO_BLOCK) {
-        // return instantly
+        this->m_sequenceQueue.push(entry);
+        this->m_queuedTotal++;
+
+        this->log_ACTIVITY_HI_SequenceQueued(Fw::LogStringArg(fileName),
+                                             static_cast<U32>(this->m_sequenceQueue.size()));
+        this->tlmWrite_queueDepth(static_cast<U32>(this->m_sequenceQueue.size()));
+        this->tlmWrite_queuedTotal(this->m_queuedTotal);
         this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::OK);
     } else {
-        // otherwise don't return a response yet. just save the opCode and cmdSeq
-        // so we can return a response later
-        this->m_entryTable[idx].opCode = opCode;
-        this->m_entryTable[idx].cmdSeq = cmdSeq;
+        // Queue disabled or full
+        if (this->m_maxQueueDepth == 0) {
+            this->log_WARNING_HI_NoAvailableSequencers();
+        } else {
+            this->log_WARNING_HI_QueueOverflow(Fw::LogStringArg(fileName));
+            this->m_queueOverflows++;
+            this->tlmWrite_queueOverflows(this->m_queueOverflows);
+        }
+        this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::EXECUTION_ERROR);
     }
 }
 
@@ -229,6 +268,108 @@ void SeqDispatcher::CANCEL_ALL_cmdHandler(const FwOpcodeType opCode, /*!< The op
             this->tlmWrite_canceledCount(++this->m_canceledCount);
         }
     }
+    this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::OK);
+}
+
+void SeqDispatcher::tryDispatchFromQueue() {
+    // Don't dispatch if queue is paused or empty
+    if (this->m_queuePaused || this->m_sequenceQueue.empty()) {
+        return;
+    }
+
+    // Get next available sequencer
+    FwIndexType idx = this->getNextAvailableSequencerIdx();
+    if (idx == -1) {
+        return;  // No sequencer available
+    }
+
+    // Get next queued sequence
+    QueueEntry entry = this->m_sequenceQueue.front();
+    this->m_sequenceQueue.pop();
+
+    this->log_ACTIVITY_HI_StartingQueuedSequence(Fw::LogStringArg(entry.fileName));
+    this->m_executedFromQueue++;
+    this->tlmWrite_sequencesExecutedFromQueue(this->m_executedFromQueue);
+    this->tlmWrite_queueDepth(static_cast<U32>(this->m_sequenceQueue.size()));
+
+    // Check if queue is now empty
+    if (this->m_sequenceQueue.empty()) {
+        this->log_ACTIVITY_LO_QueueEmpty();
+    }
+
+    // Run the sequence
+    this->runSequence(idx, entry.fileName, entry.blockState, entry.args);
+
+    if (entry.blockState == BlockState::NO_BLOCK) {
+        // Original command already got response when queued
+        // Nothing more to do
+    } else {
+        // Save opCode and cmdSeq for deferred response
+        this->m_entryTable[idx].opCode = entry.opCode;
+        this->m_entryTable[idx].cmdSeq = entry.cmdSeq;
+    }
+}
+
+void SeqDispatcher::CLEAR_QUEUE_cmdHandler(const FwOpcodeType opCode, const U32 cmdSeq) {
+    U32 numCleared = static_cast<U32>(this->m_sequenceQueue.size());
+
+    // Clear the queue
+    while (!this->m_sequenceQueue.empty()) {
+        this->m_sequenceQueue.pop();
+    }
+
+    this->log_ACTIVITY_HI_QueueCleared(numCleared);
+    this->tlmWrite_queueDepth(0);
+    this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::OK);
+}
+
+void SeqDispatcher::LIST_QUEUE_cmdHandler(const FwOpcodeType opCode, const U32 cmdSeq) {
+    U32 queueDepth = static_cast<U32>(this->m_sequenceQueue.size());
+
+    if (queueDepth == 0) {
+        this->log_ACTIVITY_LO_QueueEmpty();
+    } else {
+        // For now, just log the queue depth
+        // Future enhancement: iterate and log each entry
+        // (Need to be careful not to spam events)
+        this->log_ACTIVITY_HI_SequenceQueued(Fw::LogStringArg("Queue status"), queueDepth);
+    }
+
+    this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::OK);
+}
+
+void SeqDispatcher::GET_QUEUE_STATUS_cmdHandler(const FwOpcodeType opCode, const U32 cmdSeq) {
+    // Report current queue status via telemetry
+    this->tlmWrite_queueDepth(static_cast<U32>(this->m_sequenceQueue.size()));
+    this->tlmWrite_queuedTotal(this->m_queuedTotal);
+    this->tlmWrite_sequencesExecutedFromQueue(this->m_executedFromQueue);
+    this->tlmWrite_queueOverflows(this->m_queueOverflows);
+
+    if (this->m_sequenceQueue.empty()) {
+        this->log_ACTIVITY_LO_QueueEmpty();
+    }
+
+    this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::OK);
+}
+
+void SeqDispatcher::PAUSE_QUEUE_cmdHandler(const FwOpcodeType opCode, const U32 cmdSeq) {
+    if (!this->m_queuePaused) {
+        this->m_queuePaused = true;
+        this->log_ACTIVITY_HI_QueuePaused();
+    }
+
+    this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::OK);
+}
+
+void SeqDispatcher::RESUME_QUEUE_cmdHandler(const FwOpcodeType opCode, const U32 cmdSeq) {
+    if (this->m_queuePaused) {
+        this->m_queuePaused = false;
+        this->log_ACTIVITY_HI_QueueResumed();
+
+        // Try to dispatch from queue immediately
+        this->tryDispatchFromQueue();
+    }
+
     this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::OK);
 }
 }  // namespace Svc

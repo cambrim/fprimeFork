@@ -49,3 +49,40 @@ event CancelSequenceNotFound(
 ) \
     severity warning low \
     format "No running sequence matched file {} to cancel"
+
+event SequenceQueued(
+    filename: string size 240
+    queueDepth: U32
+) \
+    severity activity high \
+    format "Queued sequence: {} (queue depth: {})"
+
+event QueueOverflow(
+    filename: string size 240
+) \
+    severity warning high \
+    format "Queue full, rejected sequence: {}"
+
+event QueueCleared(
+    numCleared: U32
+) \
+    severity activity high \
+    format "Cleared {} sequences from queue"
+
+event StartingQueuedSequence(
+    filename: string size 240
+) \
+    severity activity high \
+    format "Starting queued sequence: {}"
+
+event QueueEmpty() \
+    severity activity low \
+    format "Sequence queue is empty"
+
+event QueuePaused() \
+    severity activity high \
+    format "Sequence queue paused"
+
+event QueueResumed() \
+    severity activity high \
+    format "Sequence queue resumed"

@@ -25,3 +25,18 @@ async command CANCEL_NAME(
 @ Broadcast a cancel to every running sequencer. This does not exclude the caller!
 @ A sequence issuing CANCEL_ALL will cancel itself is connected to this seqDispatcher.
 async command CANCEL_ALL() opcode 4
+
+@ Clear all queued sequences
+async command CLEAR_QUEUE() opcode 5
+
+@ List all queued sequences
+async command LIST_QUEUE() opcode 6
+
+@ Get queue status (depth and statistics)
+async command GET_QUEUE_STATUS() opcode 7
+
+@ Pause queue processing (running sequences continue, but queue won't dispatch)
+async command PAUSE_QUEUE() opcode 8
+
+@ Resume queue processing
+async command RESUME_QUEUE() opcode 9

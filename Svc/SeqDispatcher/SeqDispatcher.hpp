@@ -7,6 +7,7 @@
 #ifndef SeqDispatcher_HPP
 #define SeqDispatcher_HPP
 
+#include <queue>
 #include "Fw/Types/StringBase.hpp"
 #include "Svc/Seq/BlockStateEnumAc.hpp"
 #include "Svc/SeqDispatcher/SeqDispatcherComponentAc.hpp"
@@ -70,6 +71,24 @@ class SeqDispatcher final : public SeqDispatcherComponentBase {
     } m_entryTable[SeqDispatcherSequencerPorts];  //!< table of dispatch
                                                   //!< entries
 
+    // Queue entry structure
+    struct QueueEntry {
+        Fw::String fileName;
+        Svc::SeqArgs args;
+        Svc::BlockState blockState;
+        FwOpcodeType opCode;
+        U32 cmdSeq;
+        Fw::Time queueTime;
+    };
+
+    // Queue data members
+    std::queue<QueueEntry> m_sequenceQueue;  //!< Queue of pending sequences
+    bool m_queuePaused = false;              //!< Is queue paused?
+    U32 m_queuedTotal = 0;                   //!< Total sequences queued this session
+    U32 m_executedFromQueue = 0;             //!< Sequences executed from queue
+    U32 m_queueOverflows = 0;                //!< Times queue was full
+    U32 m_maxQueueDepth = 20;                //!< Maximum queue depth (from parameter)
+
     FwIndexType getNextAvailableSequencerIdx();
 
     void runSequence(FwIndexType sequencerIdx,
@@ -111,6 +130,30 @@ class SeqDispatcher final : public SeqDispatcherComponentBase {
     //! A sequence issuing CANCEL_ALL will cancel itself is connected to this seqDispatcher.
     void CANCEL_ALL_cmdHandler(const FwOpcodeType opCode, /*!< The opcode*/
                                const U32 cmdSeq);         /*!< The command sequence number*/
+
+    //! Handler implementation for command CLEAR_QUEUE
+    void CLEAR_QUEUE_cmdHandler(const FwOpcodeType opCode, /*!< The opcode*/
+                                const U32 cmdSeq);         /*!< The command sequence number*/
+
+    //! Handler implementation for command LIST_QUEUE
+    void LIST_QUEUE_cmdHandler(const FwOpcodeType opCode, /*!< The opcode*/
+                               const U32 cmdSeq);         /*!< The command sequence number*/
+
+    //! Handler implementation for command GET_QUEUE_STATUS
+    void GET_QUEUE_STATUS_cmdHandler(const FwOpcodeType opCode, /*!< The opcode*/
+                                     const U32 cmdSeq);         /*!< The command sequence number*/
+
+    //! Handler implementation for command PAUSE_QUEUE
+    void PAUSE_QUEUE_cmdHandler(const FwOpcodeType opCode, /*!< The opcode*/
+                                const U32 cmdSeq);         /*!< The command sequence number*/
+
+    //! Handler implementation for command RESUME_QUEUE
+    void RESUME_QUEUE_cmdHandler(const FwOpcodeType opCode, /*!< The opcode*/
+                                 const U32 cmdSeq);         /*!< The command sequence number*/
+
+  private:
+    //! Try to dispatch next sequence from queue
+    void tryDispatchFromQueue();
 };
 
 }  // namespace Svc

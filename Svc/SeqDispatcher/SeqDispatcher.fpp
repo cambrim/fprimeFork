@@ -33,6 +33,13 @@ module Svc {
         match seqRunOut with seqCancelOut
 
         ###############################################################################
+        # Parameters                                                                  #
+        ###############################################################################
+
+        @ Maximum queue depth (0 = queueing disabled, sequences rejected when all busy)
+        param MAX_QUEUE_DEPTH: U32 default 20
+
+        ###############################################################################
         # Standard AC Ports: Required for Channels, Events, Commands, and Parameters  #
         ###############################################################################
         @ Port for requesting the current time
@@ -55,6 +62,12 @@ module Svc {
 
         @ Port for sending telemetry channels to downlink
         telemetry port tlmOut
+
+        @ Port to return the value of a parameter
+        param get port prmGetOut
+
+        @ Port to set the value of a parameter
+        param set port prmSetOut
 
     }
 }

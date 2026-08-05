@@ -58,6 +58,17 @@ module Ref {
     stack size Default.STACK_SIZE \
     priority 20
 
+  # TODO: Add cmdSeq2 after health monitoring configuration
+  # instance cmdSeq2: Svc.CmdSequencer base id 0x10007000 \
+  #   queue size Default.QUEUE_SIZE \
+  #   stack size Default.STACK_SIZE \
+  #   priority 20
+
+  instance seqDispatcher: Svc.SeqDispatcher base id 0x10008000 \
+    queue size Default.QUEUE_SIZE \
+    stack size Default.STACK_SIZE \
+    priority 21
+
   instance dpDemo: Ref.DpDemo base id 0x0A10 \
     queue size Default.QUEUE_SIZE \
     stack size Default.STACK_SIZE \

@@ -13,6 +13,11 @@ telemetry packets RefPackets {
     cmdSeq.CS_CancelCommands
     cmdSeq.CS_CommandsExecuted
     cmdSeq.CS_SequencesCompleted
+    seqDispatcher.dispatchedCount
+    seqDispatcher.sequencersAvailable
+    seqDispatcher.queueDepth
+    seqDispatcher.queuedTotal
+    seqDispatcher.sequencesExecutedFromQueue
     ComCcsds.comQueue.comQueueDepth
     ComCcsds.comQueue.buffQueueDepth
     ComCcsds.commsBufferManager.TotalBuffs
@@ -36,6 +41,9 @@ telemetry packets RefPackets {
     FileHandling.fileManager.Errors
 
     cmdSeq.CS_Errors
+    seqDispatcher.errorCount
+    seqDispatcher.canceledCount
+    seqDispatcher.queueOverflows
     ComCcsds.commsBufferManager.NoBuffs
     ComCcsds.commsBufferManager.EmptyBuffs
 

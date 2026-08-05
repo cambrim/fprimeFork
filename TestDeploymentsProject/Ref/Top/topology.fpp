@@ -46,6 +46,8 @@ module Ref {
     instance linuxTimer
     instance comDriver
     instance cmdSeq
+    # instance cmdSeq2  # TODO: Add after health config
+    instance seqDispatcher
 
     # ----------------------------------------------------------------------
     # Pattern graph specifiers
@@ -100,6 +102,7 @@ module Ref {
       rateGroup2Comp.RateGroupMemberOut[4] -> dpDemo.run
       #connection to FileManager listing feature command for sequencing
       rateGroup2Comp.RateGroupMemberOut[5] -> FileHandling.Subtopology.fileManagerSchedIn
+      # rateGroup2Comp.RateGroupMemberOut[6] -> cmdSeq2.schedIn  # TODO: Add after health config
 
       # Rate group 3
       rateGroupDriverComp.CycleOut[Ports_RateGroups.rateGroup3] -> rateGroup3Comp.CycleIn
@@ -149,6 +152,24 @@ module Ref {
       DataProducts.Subtopology.productResponseOut -> dpDemo.productRecvIn
     }
 
+    connections Sequencing {
+      # SeqDispatcher <-> CmdSequencers
+      seqDispatcher.seqRunOut[0] -> cmdSeq.seqRunIn
+      # seqDispatcher.seqRunOut[1] -> cmdSeq2.seqRunIn  # TODO: Add after health config
+      cmdSeq.seqDone -> seqDispatcher.seqDoneIn[0]
+      # cmdSeq2.seqDone -> seqDispatcher.seqDoneIn[1]  # TODO: Add after health config
+      cmdSeq.seqStartOut -> seqDispatcher.seqStartIn[0]
+      # cmdSeq2.seqStartOut -> seqDispatcher.seqStartIn[1]  # TODO: Add after health config
+      seqDispatcher.seqCancelOut[0] -> cmdSeq.seqCancelIn
+      # seqDispatcher.seqCancelOut[1] -> cmdSeq2.seqCancelIn  # TODO: Add after health config
+
+      # CmdSequencers -> CommandDispatcher
+      cmdSeq.comCmdOut -> CdhCore.Subtopology.seqCmdBuff
+      # cmdSeq2.comCmdOut -> CdhCore.Subtopology.seqCmdBuff  # TODO: Add after health config
+      CdhCore.Subtopology.seqCmdStatus -> cmdSeq.cmdResponseIn
+      # CdhCore.Subtopology.seqCmdStatus -> cmdSeq2.cmdResponseIn  # TODO: Add after health config
+    }
+
     connections ComCcsds_CdhCore {
       # Events and telemetry to comQueue
       CdhCore.Subtopology.eventsPktSend  -> ComCcsds.Subtopology.comPacketQueueIn[ComCcsds.Ports_ComPacketQueue.EVENTS]
@@ -157,8 +178,6 @@ module Ref {
       # Router <-> CmdDispatcher
       ComCcsds.Subtopology.commandOut        -> CdhCore.Subtopology.seqCmdBuff
       CdhCore.Subtopology.seqCmdStatus       -> ComCcsds.Subtopology.cmdResponseIn
-      cmdSeq.comCmdOut                       -> CdhCore.Subtopology.seqCmdBuff
-      CdhCore.Subtopology.seqCmdStatus       -> cmdSeq.cmdResponseIn
     }
 
     connections ComCcsds_FileHandling {

@@ -1,5 +1,8 @@
 module Svc {
-    @ Dispatches command sequences to available command sequencers
+    @ Dispatches command sequences to available command sequencers.
+    @ Coordinates multiple CmdSequencer instances, allowing parallel sequence execution.
+    @ Includes automatic queueing when all sequencers are busy (configurable via MAX_QUEUE_DEPTH parameter).
+    @ See docs/sdd.md for topology integration instructions.
     active component SeqDispatcher {
 
         enum CmdSequencerState : U8 {

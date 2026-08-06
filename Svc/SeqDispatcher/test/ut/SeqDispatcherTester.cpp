@@ -325,4 +325,478 @@ void SeqDispatcherTester::testRunArgsBlockingVsNonBlocking() {
     ASSERT_TLM_errorCount(0, 1);
 }
 
+// ----------------------------------------------------------------------
+// Queue tests
+// ----------------------------------------------------------------------
+
+// Test that sequences queue when all sequencers are busy
+void SeqDispatcherTester::testQueueWhenBusy() {
+    // Set queue depth parameter
+    Fw::ParamValid valid = Fw::ParamValid::VALID;
+    this->paramSet_MAX_QUEUE_DEPTH(20, valid);
+    this->paramSend_MAX_QUEUE_DEPTH(0, 0);
+    this->component.doDispatch();
+    this->clearHistory();
+
+    Svc::SeqArgs emptyArgs{0, 0};
+
+    // Fill all sequencers with blocking sequences
+    for (int i = 0; i < SeqDispatcherSequencerPorts; i++) {
+        sendCmd_RUN_ARGS(0, 0, Fw::String("test"), BlockState::BLOCK, emptyArgs);
+        this->component.doDispatch();
+        ASSERT_CMD_RESPONSE_SIZE(0);  // No response for blocking
+    }
+    ASSERT_TLM_sequencersAvailable(SeqDispatcherSequencerPorts - 1, 0);
+    this->clearHistory();
+
+    // Next sequence should queue
+    sendCmd_RUN_ARGS(0, 0, Fw::String("queued1"), BlockState::BLOCK, emptyArgs);
+    this->component.doDispatch();
+
+    // Should get immediate OK response (queued successfully)
+    ASSERT_CMD_RESPONSE_SIZE(1);
+    ASSERT_CMD_RESPONSE(0, SeqDispatcher::OPCODE_RUN_ARGS, 0, Fw::CmdResponse::OK);
+
+    // Should have SequenceQueued event
+    ASSERT_EVENTS_SequenceQueued_SIZE(1);
+    ASSERT_EVENTS_SequenceQueued(0, "queued1", 1);
+
+    // Verify telemetry
+    ASSERT_TLM_queueDepth_SIZE(1);
+    ASSERT_TLM_queueDepth(0, 1);
+    ASSERT_TLM_queuedTotal_SIZE(1);
+    ASSERT_TLM_queuedTotal(0, 1);
+}
+
+// Test that queue rejects sequences when full
+void SeqDispatcherTester::testQueueOverflow() {
+    // Set small queue depth
+    Fw::ParamValid valid = Fw::ParamValid::VALID;
+    this->paramSet_MAX_QUEUE_DEPTH(2, valid);
+    this->paramSend_MAX_QUEUE_DEPTH(0, 0);
+    this->component.doDispatch();
+    this->clearHistory();
+
+    Svc::SeqArgs emptyArgs{0, 0};
+
+    // Fill all sequencers
+    for (int i = 0; i < SeqDispatcherSequencerPorts; i++) {
+        sendCmd_RUN_ARGS(0, 0, Fw::String("test"), BlockState::BLOCK, emptyArgs);
+        this->component.doDispatch();
+    }
+    this->clearHistory();
+
+    // Fill the queue (2 entries)
+    sendCmd_RUN_ARGS(0, 0, Fw::String("queued1"), BlockState::BLOCK, emptyArgs);
+    this->component.doDispatch();
+    ASSERT_TLM_queueDepth(0, 1);
+    this->clearHistory();
+
+    sendCmd_RUN_ARGS(0, 0, Fw::String("queued2"), BlockState::BLOCK, emptyArgs);
+    this->component.doDispatch();
+    ASSERT_TLM_queueDepth(0, 2);
+    this->clearHistory();
+
+    // Next sequence should overflow
+    sendCmd_RUN_ARGS(0, 0, Fw::String("overflow"), BlockState::BLOCK, emptyArgs);
+    this->component.doDispatch();
+
+    // Should get EXECUTION_ERROR response
+    ASSERT_CMD_RESPONSE_SIZE(1);
+    ASSERT_CMD_RESPONSE(0, SeqDispatcher::OPCODE_RUN_ARGS, 0, Fw::CmdResponse::EXECUTION_ERROR);
+
+    // Should have QueueOverflow event
+    ASSERT_EVENTS_QueueOverflow_SIZE(1);
+    ASSERT_EVENTS_QueueOverflow(0, "overflow");
+
+    // Verify overflow telemetry incremented
+    ASSERT_TLM_queueOverflows_SIZE(1);
+    ASSERT_TLM_queueOverflows(0, 1);
+
+    // Queue depth should still be 2
+    ASSERT_TLM_queueDepth(0, 2);
+}
+
+// Test that queued sequences dispatch when sequencers become available
+void SeqDispatcherTester::testQueueDispatch() {
+    // Set queue depth parameter
+    Fw::ParamValid valid = Fw::ParamValid::VALID;
+    this->paramSet_MAX_QUEUE_DEPTH(10, valid);
+    this->paramSend_MAX_QUEUE_DEPTH(0, 0);
+    this->component.doDispatch();
+    this->clearHistory();
+
+    Svc::SeqArgs emptyArgs{0, 0};
+
+    // Fill all sequencers
+    for (int i = 0; i < SeqDispatcherSequencerPorts; i++) {
+        sendCmd_RUN_ARGS(0, 0, Fw::String("running"), BlockState::BLOCK, emptyArgs);
+        this->component.doDispatch();
+    }
+    this->clearHistory();
+
+    // Queue a sequence
+    sendCmd_RUN_ARGS(0, 0, Fw::String("queued"), BlockState::BLOCK, emptyArgs);
+    this->component.doDispatch();
+    ASSERT_TLM_queueDepth(0, 1);
+    ASSERT_EVENTS_SequenceQueued_SIZE(1);
+    this->clearHistory();
+
+    // Complete first sequencer
+    this->invoke_to_seqDoneIn(0, 0, 0, Fw::CmdResponse::OK);
+    this->component.doDispatch();
+
+    // Should see StartingQueuedSequence event
+    ASSERT_EVENTS_StartingQueuedSequence_SIZE(1);
+    ASSERT_EVENTS_StartingQueuedSequence(0, "queued");
+
+    // Queue should be empty now
+    ASSERT_TLM_queueDepth(0, 0);
+
+    // SequencesExecutedFromQueue should increment
+    ASSERT_TLM_sequencesExecutedFromQueue_SIZE(1);
+    ASSERT_TLM_sequencesExecutedFromQueue(0, 1);
+
+    // Queued sequence should have been sent to sequencer 0
+    ASSERT_from_seqRunOut_SIZE(1);
+    ASSERT_from_seqRunOut(0, Fw::String("queued"), emptyArgs);
+}
+
+// Test CLEAR_QUEUE command
+void SeqDispatcherTester::testClearQueue() {
+    // Set queue depth parameter
+    Fw::ParamValid valid = Fw::ParamValid::VALID;
+    this->paramSet_MAX_QUEUE_DEPTH(10, valid);
+    this->paramSend_MAX_QUEUE_DEPTH(0, 0);
+    this->component.doDispatch();
+    this->clearHistory();
+
+    Svc::SeqArgs emptyArgs{0, 0};
+
+    // Fill all sequencers
+    for (int i = 0; i < SeqDispatcherSequencerPorts; i++) {
+        sendCmd_RUN_ARGS(0, 0, Fw::String("running"), BlockState::BLOCK, emptyArgs);
+        this->component.doDispatch();
+    }
+    this->clearHistory();
+
+    // Queue 3 sequences
+    for (int i = 0; i < 3; i++) {
+        sendCmd_RUN_ARGS(0, 0, Fw::String("queued"), BlockState::BLOCK, emptyArgs);
+        this->component.doDispatch();
+    }
+    ASSERT_TLM_queueDepth(2, 3);
+    this->clearHistory();
+
+    // Clear the queue
+    sendCmd_CLEAR_QUEUE(0, 0);
+    this->component.doDispatch();
+
+    // Should get QueueCleared event
+    ASSERT_EVENTS_QueueCleared_SIZE(1);
+    ASSERT_EVENTS_QueueCleared(0, 3);
+
+    // Queue should be empty
+    ASSERT_TLM_queueDepth(0, 0);
+
+    // Command should succeed
+    ASSERT_CMD_RESPONSE_SIZE(1);
+    ASSERT_CMD_RESPONSE(0, SeqDispatcher::OPCODE_CLEAR_QUEUE, 0, Fw::CmdResponse::OK);
+}
+
+// Test PAUSE_QUEUE and RESUME_QUEUE commands
+void SeqDispatcherTester::testPauseResumeQueue() {
+    // Set queue depth parameter
+    Fw::ParamValid valid = Fw::ParamValid::VALID;
+    this->paramSet_MAX_QUEUE_DEPTH(10, valid);
+    this->paramSend_MAX_QUEUE_DEPTH(0, 0);
+    this->component.doDispatch();
+    this->clearHistory();
+
+    Svc::SeqArgs emptyArgs{0, 0};
+
+    // Fill all sequencers
+    for (int i = 0; i < SeqDispatcherSequencerPorts; i++) {
+        sendCmd_RUN_ARGS(0, 0, Fw::String("running"), BlockState::BLOCK, emptyArgs);
+        this->component.doDispatch();
+    }
+    this->clearHistory();
+
+    // Queue a sequence
+    sendCmd_RUN_ARGS(0, 0, Fw::String("queued"), BlockState::BLOCK, emptyArgs);
+    this->component.doDispatch();
+    ASSERT_TLM_queueDepth(0, 1);
+    this->clearHistory();
+
+    // Pause the queue
+    sendCmd_PAUSE_QUEUE(0, 0);
+    this->component.doDispatch();
+    ASSERT_EVENTS_QueuePaused_SIZE(1);
+    ASSERT_CMD_RESPONSE_SIZE(1);
+    ASSERT_CMD_RESPONSE(0, SeqDispatcher::OPCODE_PAUSE_QUEUE, 0, Fw::CmdResponse::OK);
+    this->clearHistory();
+
+    // Complete first sequencer - queue should NOT dispatch (paused)
+    this->invoke_to_seqDoneIn(0, 0, 0, Fw::CmdResponse::OK);
+    this->component.doDispatch();
+
+    // Should NOT see StartingQueuedSequence event
+    ASSERT_EVENTS_StartingQueuedSequence_SIZE(0);
+
+    // Queue depth should still be 1
+    ASSERT_TLM_queueDepth(0, 1);
+
+    // No seqRunOut for queued sequence
+    ASSERT_from_seqRunOut_SIZE(0);
+    this->clearHistory();
+
+    // Resume the queue
+    sendCmd_RESUME_QUEUE(0, 0);
+    this->component.doDispatch();
+    ASSERT_EVENTS_QueueResumed_SIZE(1);
+    ASSERT_CMD_RESPONSE_SIZE(1);
+    ASSERT_CMD_RESPONSE(0, SeqDispatcher::OPCODE_RESUME_QUEUE, 0, Fw::CmdResponse::OK);
+
+    // Should immediately dispatch the queued sequence
+    ASSERT_EVENTS_StartingQueuedSequence_SIZE(1);
+    ASSERT_TLM_queueDepth(0, 0);
+    ASSERT_from_seqRunOut_SIZE(1);
+}
+
+// Test queue disabled mode (MAX_QUEUE_DEPTH = 0)
+void SeqDispatcherTester::testQueueDisabled() {
+    // Set queue depth to 0 (disabled)
+    Fw::ParamValid valid = Fw::ParamValid::VALID;
+    this->paramSet_MAX_QUEUE_DEPTH(0, valid);
+    this->paramSend_MAX_QUEUE_DEPTH(0, 0);
+    this->component.doDispatch();
+    this->clearHistory();
+
+    Svc::SeqArgs emptyArgs{0, 0};
+
+    // Fill all sequencers
+    for (int i = 0; i < SeqDispatcherSequencerPorts; i++) {
+        sendCmd_RUN_ARGS(0, 0, Fw::String("test"), BlockState::BLOCK, emptyArgs);
+        this->component.doDispatch();
+    }
+    this->clearHistory();
+
+    // Try to queue a sequence - should fail immediately (no queue event)
+    sendCmd_RUN_ARGS(0, 0, Fw::String("queued"), BlockState::BLOCK, emptyArgs);
+    this->component.doDispatch();
+
+    // Should get EXECUTION_ERROR response
+    ASSERT_CMD_RESPONSE_SIZE(1);
+    ASSERT_CMD_RESPONSE(0, SeqDispatcher::OPCODE_RUN_ARGS, 0, Fw::CmdResponse::EXECUTION_ERROR);
+
+    // Should have NoAvailableSequencers event (not SequenceQueued)
+    ASSERT_EVENTS_NoAvailableSequencers_SIZE(1);
+    ASSERT_EVENTS_SequenceQueued_SIZE(0);
+
+    // Queue depth should remain 0
+    ASSERT_TLM_queueDepth_SIZE(0);
+}
+
+// Test queue telemetry accuracy
+void SeqDispatcherTester::testQueueTelemetry() {
+    // Set queue depth parameter
+    Fw::ParamValid valid = Fw::ParamValid::VALID;
+    this->paramSet_MAX_QUEUE_DEPTH(5, valid);
+    this->paramSend_MAX_QUEUE_DEPTH(0, 0);
+    this->component.doDispatch();
+    this->clearHistory();
+
+    Svc::SeqArgs emptyArgs{0, 0};
+
+    // Fill all sequencers
+    for (int i = 0; i < SeqDispatcherSequencerPorts; i++) {
+        sendCmd_RUN_ARGS(0, 0, Fw::String("running"), BlockState::BLOCK, emptyArgs);
+        this->component.doDispatch();
+    }
+    this->clearHistory();
+
+    // Queue 3 sequences
+    for (int i = 0; i < 3; i++) {
+        sendCmd_RUN_ARGS(0, 0, Fw::String("queued"), BlockState::BLOCK, emptyArgs);
+        this->component.doDispatch();
+    }
+
+    // Verify queueDepth telemetry
+    ASSERT_TLM_queueDepth(2, 3);
+
+    // Verify queuedTotal telemetry
+    ASSERT_TLM_queuedTotal(2, 3);
+
+    this->clearHistory();
+
+    // Dispatch one from queue
+    this->invoke_to_seqDoneIn(0, 0, 0, Fw::CmdResponse::OK);
+    this->component.doDispatch();
+
+    // Verify queueDepth decremented
+    ASSERT_TLM_queueDepth(0, 2);
+
+    // Verify sequencesExecutedFromQueue incremented
+    ASSERT_TLM_sequencesExecutedFromQueue(0, 1);
+
+    this->clearHistory();
+
+    // Test overflow telemetry
+    // Queue is at 2, max is 5, so we can add 3 more
+    for (int i = 0; i < 3; i++) {
+        sendCmd_RUN_ARGS(0, 0, Fw::String("queued"), BlockState::BLOCK, emptyArgs);
+        this->component.doDispatch();
+    }
+    ASSERT_TLM_queueDepth(2, 5);  // Should be at max
+    this->clearHistory();
+
+    // Try to overflow
+    sendCmd_RUN_ARGS(0, 0, Fw::String("overflow"), BlockState::BLOCK, emptyArgs);
+    this->component.doDispatch();
+
+    // Verify queueOverflows incremented
+    ASSERT_TLM_queueOverflows(0, 1);
+}
+
+// Test that queued sequences preserve BlockState
+void SeqDispatcherTester::testBlockStatePreservation() {
+    // Set queue depth parameter
+    Fw::ParamValid valid = Fw::ParamValid::VALID;
+    this->paramSet_MAX_QUEUE_DEPTH(10, valid);
+    this->paramSend_MAX_QUEUE_DEPTH(0, 0);
+    this->component.doDispatch();
+    this->clearHistory();
+
+    Svc::SeqArgs emptyArgs{0, 0};
+
+    // Fill all sequencers
+    for (int i = 0; i < SeqDispatcherSequencerPorts; i++) {
+        sendCmd_RUN_ARGS(0, 0, Fw::String("running"), BlockState::BLOCK, emptyArgs);
+        this->component.doDispatch();
+    }
+    this->clearHistory();
+
+    // Queue with NO_BLOCK
+    sendCmd_RUN_ARGS(0, 0, Fw::String("queued_noblock"), BlockState::NO_BLOCK, emptyArgs);
+    this->component.doDispatch();
+
+    // Should get immediate OK response (queued + NO_BLOCK means immediate response)
+    ASSERT_CMD_RESPONSE_SIZE(1);
+    ASSERT_CMD_RESPONSE(0, SeqDispatcher::OPCODE_RUN_ARGS, 0, Fw::CmdResponse::OK);
+    this->clearHistory();
+
+    // Complete first sequencer
+    this->invoke_to_seqDoneIn(0, 0, 0, Fw::CmdResponse::OK);
+    this->component.doDispatch();
+
+    // Queued sequence should dispatch (already got response earlier due to NO_BLOCK)
+    ASSERT_EVENTS_StartingQueuedSequence_SIZE(1);
+
+    // Should NOT get another command response (already got it when queued)
+    ASSERT_CMD_RESPONSE_SIZE(1);  // Only the response from seqDoneIn of the original running sequence
+    ASSERT_CMD_RESPONSE(0, SeqDispatcher::OPCODE_RUN_ARGS, 0, Fw::CmdResponse::OK);
+}
+
+// Test that queue continues processing after a sequence error
+void SeqDispatcherTester::testQueueWithErrors() {
+    // Set queue depth parameter
+    Fw::ParamValid valid = Fw::ParamValid::VALID;
+    this->paramSet_MAX_QUEUE_DEPTH(10, valid);
+    this->paramSend_MAX_QUEUE_DEPTH(0, 0);
+    this->component.doDispatch();
+    this->clearHistory();
+
+    Svc::SeqArgs emptyArgs{0, 0};
+
+    // Fill all sequencers
+    for (int i = 0; i < SeqDispatcherSequencerPorts; i++) {
+        sendCmd_RUN_ARGS(0, 0, Fw::String("running"), BlockState::BLOCK, emptyArgs);
+        this->component.doDispatch();
+    }
+    this->clearHistory();
+
+    // Queue 2 sequences
+    sendCmd_RUN_ARGS(0, 0, Fw::String("queued1"), BlockState::BLOCK, emptyArgs);
+    this->component.doDispatch();
+    sendCmd_RUN_ARGS(0, 0, Fw::String("queued2"), BlockState::BLOCK, emptyArgs);
+    this->component.doDispatch();
+    ASSERT_TLM_queueDepth(1, 2);
+    this->clearHistory();
+
+    // Complete first sequencer with ERROR
+    this->invoke_to_seqDoneIn(0, 0, 0, Fw::CmdResponse::EXECUTION_ERROR);
+    this->component.doDispatch();
+
+    // First queued sequence should still dispatch despite error
+    ASSERT_EVENTS_StartingQueuedSequence_SIZE(1);
+    ASSERT_EVENTS_StartingQueuedSequence(0, "queued1");
+    ASSERT_TLM_queueDepth(0, 1);
+    this->clearHistory();
+
+    // Complete that sequence
+    this->invoke_to_seqDoneIn(0, 0, 0, Fw::CmdResponse::OK);
+    this->component.doDispatch();
+
+    // Second queued sequence should dispatch
+    ASSERT_EVENTS_StartingQueuedSequence_SIZE(1);
+    ASSERT_EVENTS_StartingQueuedSequence(0, "queued2");
+    ASSERT_TLM_queueDepth(0, 0);
+
+    // Queue should be empty, not halted
+    ASSERT_from_seqRunOut_SIZE(2);  // Both queued sequences dispatched
+}
+
+// Test that queue works with multiple sequencers
+void SeqDispatcherTester::testMultipleSequencers() {
+    // This test assumes SeqDispatcherSequencerPorts >= 2
+    if (SeqDispatcherSequencerPorts < 2) {
+        // Skip test if only 1 sequencer
+        return;
+    }
+
+    // Set queue depth parameter
+    Fw::ParamValid valid = Fw::ParamValid::VALID;
+    this->paramSet_MAX_QUEUE_DEPTH(10, valid);
+    this->paramSend_MAX_QUEUE_DEPTH(0, 0);
+    this->component.doDispatch();
+    this->clearHistory();
+
+    Svc::SeqArgs emptyArgs{0, 0};
+
+    // Fill all sequencers
+    for (int i = 0; i < SeqDispatcherSequencerPorts; i++) {
+        sendCmd_RUN_ARGS(0, 0, Fw::String("running"), BlockState::BLOCK, emptyArgs);
+        this->component.doDispatch();
+    }
+    this->clearHistory();
+
+    // Queue 2 sequences
+    sendCmd_RUN_ARGS(0, 0, Fw::String("queued1"), BlockState::BLOCK, emptyArgs);
+    this->component.doDispatch();
+    sendCmd_RUN_ARGS(0, 0, Fw::String("queued2"), BlockState::BLOCK, emptyArgs);
+    this->component.doDispatch();
+    ASSERT_TLM_queueDepth(1, 2);
+    this->clearHistory();
+
+    // Complete sequencer 0
+    this->invoke_to_seqDoneIn(0, 0, 0, Fw::CmdResponse::OK);
+    this->component.doDispatch();
+
+    // First queued sequence should dispatch to sequencer 0
+    ASSERT_EVENTS_StartingQueuedSequence_SIZE(1);
+    ASSERT_TLM_queueDepth(0, 1);
+    this->clearHistory();
+
+    // Complete sequencer 1
+    this->invoke_to_seqDoneIn(1, 0, 0, Fw::CmdResponse::OK);
+    this->component.doDispatch();
+
+    // Second queued sequence should dispatch to sequencer 1
+    ASSERT_EVENTS_StartingQueuedSequence_SIZE(1);
+    ASSERT_TLM_queueDepth(0, 0);
+
+    // Verify both dispatched to different sequencers
+    ASSERT_from_seqRunOut_SIZE(2);
+}
+
 }  // namespace Svc

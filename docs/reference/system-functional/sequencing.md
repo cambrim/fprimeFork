@@ -4,7 +4,7 @@
 ## References
 
 - [F Prime Command Sequencing SDD](https://github.com/nasa/fprime/blob/devel/Svc/CmdSequencer/docs/sdd.md)
-- [F Prime Sequence Dispatcher SDD](https://github.com/nasa/fprime/blob/devel/Svc/SeqDispatcher/docs/sdd.md)
+- [F Prime Sequence Dispatcher SDD](https://github.com/nasa/fprime/blob/devel/Svc/SeqDispatcher/docs/sdd.md) (includes topology integration instructions)
 - [F Prime Sequence Format](https://github.com/nasa/fprime/blob/devel/Svc/SeqDispatcher/docs/seq_format.md)
 - [F Prime Command Dispatcher SDD](https://github.com/nasa/fprime/blob/devel/Svc/CmdDispatcher/docs/sdd.md)
 - [Example F Prime Sequence](https://github.com/nasa/fprime-gds/blob/devel/examples/simple_sequence.seq)]
@@ -35,7 +35,7 @@ If any of these validation checks fail, the sequence will not load and an error 
 
 Fprime can be configured with multiple Sequence Dispatcher components and multiple Command Sequencer components. Each Command Sequencer component is assigned to a specific Sequence Dispatcher component creating a pool of sequence "engines" to execute.
 
-The Sequence Dispatcher component routes the sequence file to an available Command Sequencer component for execution. If no Command Sequencer components are available, the sequence will be rejected.
+The Sequence Dispatcher component routes the sequence file to an available Command Sequencer component for execution. If no Command Sequencer components are available, the sequence will be rejected, or queued if the optional queueing feature is enabled (see the Sequence Dispatcher SDD for details on queue configuration).
 
 Each Command Sequencer component executes one sequence at a time. 
 

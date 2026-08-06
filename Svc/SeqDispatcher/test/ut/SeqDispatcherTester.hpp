@@ -49,6 +49,18 @@ class SeqDispatcherTester : public SeqDispatcherGTestBase {
     void testCancelAll();
     void testCancelAllNoneRunning();
 
+    // Queue tests
+    void testQueueWhenBusy();
+    void testQueueOverflow();
+    void testQueueDispatch();
+    void testClearQueue();
+    void testPauseResumeQueue();
+    void testQueueDisabled();
+    void testQueueTelemetry();
+    void testBlockStatePreservation();
+    void testQueueWithErrors();
+    void testMultipleSequencers();
+
   private:
     // ----------------------------------------------------------------------
     // Handlers for typed from ports

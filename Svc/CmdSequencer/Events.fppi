@@ -221,3 +221,38 @@ event CS_NoRecords(
   severity warning low \
   id 25 \
   format "Sequence file {} has no records. Ignoring."
+
+@ A nested sequence was called via CS_CALL
+event CS_SequenceNested(
+                         fileName: string size 60 @< The child sequence file name
+                         nestingLevel: U32 @< Current nesting depth (1 = first level)
+                       ) \
+  severity activity high \
+  id 26 \
+  format "Nested sequence: {} (level {})"
+
+@ Resuming parent sequence after CS_CALL child completed
+event CS_SequenceResuming(
+                           parentFile: string size 60 @< The parent sequence file name
+                           childFile: string size 60 @< The child sequence that just completed
+                           nestingLevel: U32 @< Current nesting depth after resume
+                         ) \
+  severity activity high \
+  id 27 \
+  format "Resuming parent sequence: {} after {} (level {})"
+
+@ CS_CALL rejected: nesting too deep
+event CS_NestedTooDeep(
+                        maxDepth: U32 @< Maximum nesting depth
+                      ) \
+  severity warning high \
+  id 28 \
+  format "CS_CALL rejected: nesting depth exceeds maximum ({})"
+
+@ CS_CALL rejected: invalid mode
+event CS_InvalidMode(
+                      command: string size 40 @< The command name
+                    ) \
+  severity warning high \
+  id 29 \
+  format "{} rejected: must be in AUTO mode"

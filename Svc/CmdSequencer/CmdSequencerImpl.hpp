@@ -18,6 +18,7 @@
 #include "Os/ValidateFile.hpp"
 #include "Svc/CmdSequencer/CmdSequencerComponentAc.hpp"
 #include "Svc/Seq/BlockStateEnumAc.hpp"
+#include <stack>
 
 namespace Svc {
 
@@ -461,6 +462,43 @@ class CmdSequencerComponentImpl final : public CmdSequencerComponentBase {
         Fw::Time expirationTime;
     };
 
+    //! \class SequenceState
+    //! \brief Saved state for nested sequence execution (CS_CALL)
+    class SequenceState {
+      public:
+        //! Construct a SequenceState object
+        SequenceState()
+            : executedCount(0),
+              opCode(0),
+              cmdSeq(0),
+              blockState(Svc::BlockState::NO_BLOCK),
+              runMode(STOPPED),
+              stepMode(AUTO) {}
+
+      public:
+        //! The sequence file name (reload from disk on restore)
+        Fw::CmdStringArg fileName;
+
+        //! Commands executed before pause
+        U32 executedCount;
+
+        //! Calling command context
+        FwOpcodeType opCode;
+        U32 cmdSeq;
+        Svc::BlockState::t blockState;
+
+        //! Timer state
+        Timer cmdTimer;
+        Timer cmdTimeoutTimer;
+
+        //! Execution mode
+        RunMode runMode;
+        StepMode stepMode;
+
+        //! Current record (saved for resumption)
+        Sequence::Record record;
+    };
+
   public:
     // ----------------------------------------------------------------------
     // Construction, initialization, and destruction
@@ -601,6 +639,13 @@ class CmdSequencerComponentImpl final : public CmdSequencerComponentBase {
                                  const U32 cmdSeq           /*!< The command sequence number*/
                                  ) override;
 
+    //! Handler for command CS_CALL
+    //! Call a nested sequence (pauses current, executes child, resumes parent)
+    void CS_CALL_cmdHandler(FwOpcodeType opCode,              //!< The opcode
+                           U32 cmdSeq,                        //!< The command sequence number
+                           const Fw::CmdStringArg& fileName   //!< The sequence file to call
+                           ) override;
+
   private:
     // ----------------------------------------------------------------------
     // Private helper methods
@@ -652,6 +697,14 @@ class CmdSequencerComponentImpl final : public CmdSequencerComponentBase {
 
     //! Sequence run helper
     void doSequenceRun(const Fw::StringBase& fileName);
+
+    //! Capture current sequencer state for CS_CALL
+    //! \return The captured state
+    SequenceState captureCurrentState();
+
+    //! Restore sequencer state after CS_CALL child completes
+    //! \param state The state to restore
+    void restoreParentState(const SequenceState& state);
 
   private:
     // ----------------------------------------------------------------------
@@ -705,6 +758,9 @@ class CmdSequencerComponentImpl final : public CmdSequencerComponentBase {
     FwOpcodeType m_opCode;
     U32 m_cmdSeq;
     bool m_join_waiting;
+
+    //! Stack of nested sequence states for CS_CALL
+    std::stack<SequenceState> m_nestedStateStack;
 
     //! Telemetry to update sequence not running
     const Fw::String NO_SEQ{"<no seq>"};

@@ -239,8 +239,133 @@ void CmdSequencerComponentImpl::CS_JOIN_WAIT_cmdHandler(const FwOpcodeType opCod
     }
 }
 
+void CmdSequencerComponentImpl::CS_CALL_cmdHandler(const FwOpcodeType opCode,
+                                                   const U32 cmdSeq,
+                                                   const Fw::CmdStringArg& fileName) {
+    // 1. Verify preconditions
+    if (this->m_runMode != RUNNING) {
+        // Not currently running a sequence
+        this->log_WARNING_HI_CS_NoSequenceActive();
+        this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::EXECUTION_ERROR);
+        return;
+    }
+
+    if (this->m_stepMode != AUTO) {
+        // CS_CALL only works in AUTO mode
+        this->log_WARNING_HI_CS_InvalidMode("CS_CALL");
+        this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::EXECUTION_ERROR);
+        return;
+    }
+
+    // 2. Check stack depth limit (prevent infinite recursion)
+    const U32 MAX_NESTING_DEPTH = 5;
+    if (this->m_nestedStateStack.size() >= MAX_NESTING_DEPTH) {
+        this->log_WARNING_HI_CS_NestedTooDeep(MAX_NESTING_DEPTH);
+        this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::EXECUTION_ERROR);
+        return;
+    }
+
+    // 3. Capture current state
+    SequenceState parentState = this->captureCurrentState();
+    this->m_nestedStateStack.push(parentState);
+
+    // 4. Load child sequence
+    const bool loaded = this->loadFile(fileName);
+    if (!loaded) {
+        // Failed to load child, restore parent
+        this->m_nestedStateStack.pop();
+        this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::EXECUTION_ERROR);
+        return;
+    }
+
+    // 5. Reset execution state for child
+    this->m_executedCount = 0;
+    this->m_runMode = RUNNING;
+    this->m_stepMode = AUTO;
+    this->m_blockState = Svc::BlockState::NO_BLOCK;  // Child runs in NO_BLOCK mode
+    this->m_cmdTimer.clear();
+    this->m_cmdTimeoutTimer.clear();
+
+    // 6. Log event
+    Fw::LogStringArg& logFileName = this->m_sequence->getLogFileName();
+    this->log_ACTIVITY_HI_CS_SequenceNested(logFileName, static_cast<U32>(this->m_nestedStateStack.size()));
+
+    // 7. Send immediate OK response (like NO_BLOCK)
+    this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::OK);
+
+    // 8. Child will execute on next schedIn call
+}
+
 // ----------------------------------------------------------------------
 // Private helper methods
+// ----------------------------------------------------------------------
+
+CmdSequencerComponentImpl::SequenceState CmdSequencerComponentImpl::captureCurrentState() {
+    SequenceState state;
+
+    // Save sequence filename (will reload on restore)
+    state.fileName = this->m_sequence->getFileName();
+
+    // Save execution position
+    state.executedCount = this->m_executedCount;
+
+    // Save command context
+    state.opCode = this->m_opCode;
+    state.cmdSeq = this->m_cmdSeq;
+    state.blockState = this->m_blockState;
+
+    // Save timer state
+    state.cmdTimer = this->m_cmdTimer;
+    state.cmdTimeoutTimer = this->m_cmdTimeoutTimer;
+
+    // Save execution mode
+    state.runMode = this->m_runMode;
+    state.stepMode = this->m_stepMode;
+
+    // Save current record
+    state.record = this->m_record;
+
+    return state;
+}
+
+void CmdSequencerComponentImpl::restoreParentState(const SequenceState& state) {
+    // Reload sequence file from disk
+    const bool loaded = this->loadFile(state.fileName);
+    FW_ASSERT(loaded, static_cast<FwAssertArgType>(state.fileName.length()));  // Sequence must reload successfully
+
+    // Fast-forward to execution position by consuming records
+    for (U32 i = 0; i < state.executedCount; i++) {
+        if (this->m_sequence->hasMoreRecords()) {
+            Sequence::Record dummy;
+            this->m_sequence->nextRecord(dummy);
+        } else {
+            // Sequence has fewer records than before - file changed?
+            FW_ASSERT(false, static_cast<FwAssertArgType>(state.executedCount), static_cast<FwAssertArgType>(i));
+        }
+    }
+
+    // Restore execution position
+    this->m_executedCount = state.executedCount;
+
+    // Restore command context
+    this->m_opCode = state.opCode;
+    this->m_cmdSeq = state.cmdSeq;
+    this->m_blockState = state.blockState;
+
+    // Restore timer state
+    this->m_cmdTimer = state.cmdTimer;
+    this->m_cmdTimeoutTimer = state.cmdTimeoutTimer;
+
+    // Restore execution mode
+    this->m_runMode = state.runMode;
+    this->m_stepMode = state.stepMode;
+
+    // Restore current record
+    this->m_record = state.record;
+}
+
+// ----------------------------------------------------------------------
+// Existing private helper methods
 // ----------------------------------------------------------------------
 
 bool CmdSequencerComponentImpl ::loadFile(const Fw::ConstStringBase& fileName) {
@@ -276,6 +401,12 @@ void CmdSequencerComponentImpl::performCmd_Cancel() {
     this->m_cmdTimer.clear();
     this->m_cmdTimeoutTimer.clear();
     this->m_executedCount = 0;
+
+    // Clear the nested state stack (cancel aborts all levels)
+    while (!this->m_nestedStateStack.empty()) {
+        this->m_nestedStateStack.pop();
+    }
+
     // write sequence done port with error, if connected
     if (this->isConnected_seqDone_OutputPort(0)) {
         this->seqDone_out(0, 0, 0, Fw::CmdResponse::EXECUTION_ERROR);
@@ -449,6 +580,31 @@ void CmdSequencerComponentImpl::performCmd_Step() {
 
 void CmdSequencerComponentImpl::sequenceComplete() {
     FW_ASSERT(this->m_sequence != nullptr);
+
+    // Check if there's a parent sequence on the stack (CS_CALL)
+    if (!this->m_nestedStateStack.empty()) {
+        // We just finished a child sequence called via CS_CALL
+        // Pop and restore parent state
+        SequenceState parent = this->m_nestedStateStack.top();
+        this->m_nestedStateStack.pop();
+
+        // Log event
+        Fw::LogStringArg& childFileName = this->m_sequence->getLogFileName();
+        Fw::LogStringArg parentFileLog(parent.fileName.toChar());
+        this->log_ACTIVITY_HI_CS_SequenceResuming(
+            parentFileLog,
+            childFileName,
+            static_cast<U32>(this->m_nestedStateStack.size())
+        );
+
+        // Restore parent state
+        this->restoreParentState(parent);
+
+        // Parent will continue execution on next schedIn
+        return;  // Don't execute normal completion logic
+    }
+
+    // Normal completion (no parent on stack)
     ++this->m_sequencesCompletedCount;
     // reset buffer
     this->m_sequence->clear();

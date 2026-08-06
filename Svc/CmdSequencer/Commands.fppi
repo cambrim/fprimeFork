@@ -36,3 +36,9 @@ async command CS_MANUAL \
 @ Wait for sequences that are running to finish. Allow user to run multiple seq files in SEQ_NO_BLOCK mode then wait for them to finish before allowing more seq run request.
 async command CS_JOIN_WAIT \
   opcode 7
+
+@ Call a nested sequence (pauses current, executes child, resumes parent). Requires AUTO mode. Works with single sequencer.
+async command CS_CALL(
+                       fileName: string size FileNameStringSize @< The sequence file to call
+                     ) \
+  opcode 8

@@ -10,6 +10,7 @@
 #include <Os/FileSystem.hpp>
 #include "CmdSequencerTester.hpp"
 #include "Svc/CmdSequencer/test/ut/AMPCS.hpp"
+#include "Svc/CmdSequencer/test/ut/CsCall.hpp"
 #include "Svc/CmdSequencer/test/ut/Health.hpp"
 #include "Svc/CmdSequencer/test/ut/Immediate.hpp"
 #include "Svc/CmdSequencer/test/ut/ImmediateEOS.hpp"
@@ -413,6 +414,46 @@ TEST(InvalidFiles, RunNoRecords) {
 TEST(InvalidFiles, ValidateNoRecords) {
     Svc::NoRecords::CmdSequencerTester tester;
     tester.ValidateNoRecords();
+}
+
+TEST(CsCall, CsCallBasic) {
+    Svc::CsCall::CmdSequencerTester tester;
+    tester.test_cs_call_basic();
+}
+
+TEST(CsCall, CsCallMultiLevel) {
+    Svc::CsCall::CmdSequencerTester tester;
+    tester.test_cs_call_multi_level();
+}
+
+TEST(CsCall, CsCallDepthLimit) {
+    Svc::CsCall::CmdSequencerTester tester;
+    tester.test_cs_call_depth_limit();
+}
+
+TEST(CsCall, CsCallNotRunning) {
+    Svc::CsCall::CmdSequencerTester tester;
+    tester.test_cs_call_not_running();
+}
+
+TEST(CsCall, CsCallManualMode) {
+    Svc::CsCall::CmdSequencerTester tester;
+    tester.test_cs_call_manual_mode();
+}
+
+TEST(CsCall, CsCallCancel) {
+    Svc::CsCall::CmdSequencerTester tester;
+    tester.test_cs_call_cancel();
+}
+
+TEST(CsCall, CsCallLoadFailure) {
+    Svc::CsCall::CmdSequencerTester tester;
+    tester.test_cs_call_load_failure();
+}
+
+TEST(CsCall, CsCallStateRestore) {
+    Svc::CsCall::CmdSequencerTester tester;
+    tester.test_cs_call_state_restore();
 }
 
 // ======================================================================
